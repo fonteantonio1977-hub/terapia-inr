@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>INR & COUMADIN</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#b91c1c">
+<!-- iOS PWA essentials -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="INR & COUMADIN">
+<link rel="apple-touch-icon" href="https://fonteantonio1977.github.io/terapia-inr/apple-touch-icon.png">
+<style>
+:root{color-scheme:light; --bg:#fff1f2; --card:#ffffff; --text:#111827; --muted:#6b7280; --border:#e5e7eb; --primary:#b91c1c;}
+*{box-sizing:border-box} body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:var(--text);}
+</style>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.9/babel.min.js" crossorigin></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useMemo, useRef, useState, useEffect } = React;
+const { BarChart, Bar, Cell, LabelList, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceArea, ReferenceLine, ResponsiveContainer } = Recharts;
+
+// ================== UI PRIMITIVES ==================
+const Card = ({ children, className = "" }) => (
+  <div className={`rounded-2xl shadow-sm border border-gray-200 p-4 bg-white ${className}`}>{children}</div>
+);
+const H = ({ children }) => <h2 className="text-xl font-semibold mb-2">{children}</h2>;
+const Dot = ({ className = "" }) => <span className={`inline-block w-2.5 h-2.5 rounded-full align-middle ${className}`} />;
+
+// ================== UTILS ==================
+const fmt = new Intl.DateTimeFormat("it-IT", { day: "2-digit", month: "2-digit" });
+const fmtFull = new Intl.DateTimeFormat("it-IT", { weekday: "short", day: "2-digit", month: "short" });
+const todayISO = () => new Date().toISOString().slice(0, 10);
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const startOfDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+const iso = (d) => new Date(d).toISOString().slice(0, 10);
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+const sanitize = (v, fallback = 0) => { const n = Number(v); return Number.isFinite(n) ? n : fallback; };
+const fractionLabel = (f) => (f === 1 ? "1" : f === 0.75 ? "3/4" : f === 0.5 ? "1/2" : "1/4");
+const formatMgIT = (v) => `${v.toLocaleString('it-IT', { maximumFractionDigits: 2, minimumFractionDigits: (Math.round((v*100)%100)===0?0:2) })} mg`;
+const calcTotal = (fraction, base) => +(fraction * base).toFixed(2);
+const isFutureISO = (isoDate, refISO = todayISO()) => { const a = new Date(isoDate); a.setHours(0,0,0,0); const b = new Date(refISO); b.setHours(0,0,0,0); return a.getTime() > b.getTime(); };
+
+// CSV helper
+const toCSV = (rows, sep = ';') => rows
+  .map(r => r.map(x => {
+    const s = String(x ?? '');
+    return (s.includes(sep) || s.includes('"') || /\s/.test(s)) ? `"${s.replace(/"/g,'""')}"` : s;
+  }).join(sep))
+  .join('\n');
+
+// ================== PDF helpers ==================
+const loadScript = (src) => new Promise((res, rej) => { const s=document.createElement('script'); s.src=src; s.async=true; s.onload=res; s.onerror=()=>rej(new Error('Impossibile caricare '+src)); document.head.appendChild(s);});
+async function ensurePdfDeps(){
+  if(!window.html2canvas){ await loadScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js'); }
+  if(!window.jspdf){ await loadScript('https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js'); }
+  const jsPDF = window.jspdf && window.jspdf.jsPDF;
+  if(!window.html2canvas || !jsPDF) throw new Error('Dipendenze PDF non disponibili');
+  return { html2canvas: window.html2canvas, jsPDF };
+}
+async function exportElementToPDF(el, opts){
+  if (!el) throw new Error("Elemento non trovato per l'export PDF");
+  const filename = typeof opts === 'string' ? opts : (opts && opts.filename) ? opts.filename : 'Calendario_dosi.pdf';
+  const { html2canvas, jsPDF } = await ensurePdfDeps();
+  const hidden = [];
+  try {
+    const toHide = el.querySelectorAll('[data-hide-on-export="true"]');
+    toHide.forEach((node)=>{ hidden.push([node, node.style.visibility]); node.style.visibility='hidden'; });
+    await new Promise(r => requestAnimationFrame(r));
+    const canvas = await html2canvas(el, { scale: 2, useCORS: true, logging: false, windowWidth: document.documentElement.scrollWidth });
+    if (!canvas || !Number.isFinite(canvas.width) || !Number.isFinite(canvas.height) || canvas.width === 0 || canvas.height === 0) { throw new Error('Acquisizione canvas fallita: dimensioni non valide'); }
+    const imgData = canvas.toDataURL('image/png');
+    const pdf = new jsPDF('p','mm','a4');
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const margin = 10;
+    const usableWidth = pageWidth - margin*2;
+    const ratio = usableWidth / canvas.width;
+    let imgHeight = canvas.height * ratio;
+    const title = 'Terapia assunta';
+    const patient = 'Paziente: –';
+    const date = new Date().toLocaleDateString('it-IT');
+    const addHeaderFooter = (pageNum, totalPages) => {
+      pdf.setFontSize(14); pdf.text(title, pageWidth / 2, 10, { align: 'center' });
+      pdf.setFontSize(11); pdf.text(patient, pageWidth / 2, 17, { align: 'center' });
+      pdf.setFontSize(10); pdf.text(`Data: ${date}`, margin, pageHeight - 5); pdf.text(`Pagina ${pageNum} di ${totalPages}`, pageWidth - margin, pageHeight - 5, { align: 'right' });
+    };
+    if (imgHeight <= pageHeight - margin*6) { addHeaderFooter(1, 1); pdf.addImage(imgData, 'PNG', margin, 25, usableWidth, imgHeight); }
+    else {
+      let sY = 0; const sliceHeightPx = (pageHeight - margin*6) / ratio; let pageNum = 0; const totalPages = Math.ceil(canvas.height / sliceHeightPx);
+      while (sY < canvas.height) {
+        const slice = document.createElement('canvas'); slice.width = canvas.width; slice.height = Math.min(sliceHeightPx, canvas.height - sY);
+        const ctx = slice.getContext('2d'); ctx.drawImage(canvas, 0, -sY);
+        const sliceImg = slice.toDataURL('image/png'); if (pageNum > 0) pdf.addPage(); pageNum++;
+        addHeaderFooter(pageNum, totalPages); pdf.addImage(sliceImg, 'PNG', margin, 25, usableWidth, slice.height * ratio); sY += sliceHeightPx;
+      }
+    }
+    pdf.save(filename);
+  } finally { hidden.forEach(([node, vis])=>{ node.style.visibility = vis; }); }
+}
+
+// ===== Components =====
+function DoseEditor({ date, dose, onChangeFraction }) {
+  const fraction = (dose && dose.fraction != null) ? dose.fraction : 1;
+  const baseMg = (dose && dose.baseMg != null) ? dose.baseMg : 5;
+  const total = calcTotal(fraction, baseMg);
+  return (
+    <div className="mt-2 space-y-1 text-[12px]">
+      <div className="flex items-center gap-1">
+        <label className="text-[10px] text-gray-600 shrink-0">Dose</label>
+        <select aria-label="Seleziona frazione dose" className="border rounded px-1 py-0.5 text-[12px]" value={fraction} onChange={(e) => onChangeFraction(date, parseFloat(e.target.value))}>
+          <option value={1}>1</option>
+          <option value={0.75}>3/4</option>
+          <option value={0.5}>1/2</option>
+          <option value={0.25}>1/4</option>
+        </select>
+        <span className="text-[11px] text-gray-700">= {formatMgIT(total)}</span>
+      </div>
+    </div>
+  );
+}
+function RangeDoseForm({ onApply, defaultStart, defaultEnd }) {
+  const [start, setStart] = useState(defaultStart || todayISO());
+  const [end, setEnd] = useState(defaultEnd || iso(addDays(new Date(), 7)));
+  const [fraction, setFraction] = useState(1);
+  const [baseMg, setBaseMg] = useState(5);
+  const [overwrite, setOverwrite] = useState(true);
+  const [alternate, setAlternate] = useState(false);
+  const [fractionA, setFractionA] = useState(1);
+  const [fractionB, setFractionB] = useState(0.5);
+  const [startWith, setStartWith] = useState('A');
+  const totalA = calcTotal(fractionA, baseMg);
+  const totalB = calcTotal(fractionB, baseMg);
+
+  return (
+    <div className="mt-4 border-t pt-4 grid gap-3">
+      <div className="text-sm font-semibold">Imposta dosaggio su intervallo</div>
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+        <div>
+          <label className="text-xs text-gray-600">Dal</label>
+          <input type="date" value={start} onChange={(e)=>setStart(e.target.value)} className="border rounded px-2 py-1 w-full" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-600">Al</label>
+          <input type="date" value={end} onChange={(e)=>setEnd(e.target.value)} className="border rounded px-2 py-1 w-full" />
+        </div>
+        <div>
+          <label className="text-xs text-gray-600">Base mg</label>
+          <input aria-label="Base milligrammi" type="number" step="0.25" min="0" max="30" value={baseMg} onChange={(e)=>setBaseMg(clamp(sanitize(e.target.value,5),0,30))} className="border rounded px-2 py-1 w-full" />
+          <div className="text-[11px] text-gray-500 mt-1">Valido 0–30 mg</div>
+        </div>
+        <div className="flex items-end">
+          <label className="text-sm text-gray-600 flex items-center gap-2">
+            <input type="checkbox" className="accent-red-700" checked={alternate} onChange={(e)=>setAlternate(e.target.checked)} />
+            Alterna due dosaggi (A/B)
+          </label>
+        </div>
+        <div>
+          <label className="text-xs text-gray-600">Frazione {alternate ? 'A' : '(singola)'}</label>
+          <select value={alternate?fractionA:fraction} onChange={(e)=> (alternate? setFractionA(parseFloat(e.target.value)) : setFraction(parseFloat(e.target.value)))} className="border rounded px-2 py-1 w-full">
+            <option value={1}>1</option>
+            <option value={0.75}>3/4</option>
+            <option value={0.5}>1/2</option>
+            <option value={0.25}>1/4</option>
+          </select>
+          <div className="text-[11px] text-gray-500 mt-1">{alternate ? `A = ${totalA} mg` : `Totale = ${calcTotal(fraction, baseMg)} mg`}</div>
+        </div>
+        <div className={alternate ? 'block' : 'hidden'}>
+          <label className="text-xs text-gray-600">Frazione B</label>
+          <select value={fractionB} onChange={(e)=>setFractionB(parseFloat(e.target.value))} className="border rounded px-2 py-1 w-full">
+            <option value={1}>1</option>
+            <option value={0.75}>3/4</option>
+            <option value={0.5}>1/2</option>
+            <option value={0.25}>1/4</option>
+          </select>
+          <div className="text-[11px] text-gray-500 mt-1">B = {totalB} mg</div>
+        </div>
+      </div>
+
+      {alternate && (
+        <div className="grid grid-cols-1 sm:grid-cols-6 gap-2">
+          <div className="sm:col-span-2">
+            <label className="text-xs text-gray-600">Inizia con</label>
+            <div className="flex items-center gap-3 border rounded px-2 py-1">
+              <label className="text-sm flex items-center gap-1">
+                <input type="radio" name="startWith" checked={startWith==='A'} onChange={()=>setStartWith('A')} /> A
+              </label>
+              <label className="text-sm flex items-center gap-1">
+                <input type="radio" name="startWith" checked={startWith==='B'} onChange={()=>setStartWith('B')} /> B
+              </label>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <label className="text-sm text-gray-600 flex items-center gap-2 mt-2">
+        <input type="checkbox" className="accent-red-700" checked={overwrite} onChange={(e)=>setOverwrite(e.target.checked)} />
+        Sovrascrivi giorni già impostati
+      </label>
+
+      <div>
+        <button aria-label="Applica dosaggio su intervallo" className="px-3 py-1 rounded-lg text-white" style={{background:'var(--primary)'}} onClick={() => onApply({ start, end, overwrite, baseMg, alternate, fraction, fractionA, fractionB, startWith })}>Applica intervallo</button>
+      </div>
+    </div>
+  );
+}
+function StatusChip({ status }) {
+  const map = {
+    presa: { cls: 'bg-green-100 text-green-700 border-green-300', label: 'presa' },
+    dimenticata: { cls: 'bg-red-100 text-red-700 border-red-300', label: 'dimenticata' },
+    oggi: { cls: 'bg-orange-100 text-orange-700 border-orange-300', label: 'da prendere' },
+    other: { cls: 'bg-gray-100 text-gray-600 border-gray-300', label: '—' },
+  };
+  const m = map[status] || map.other;
+  return <span className={`text-[10px] px-2 py-0.5 rounded border ${m.cls}`}>{m.label}</span>;
+}
+
+// ================== MAIN APP ==================
+function App() {
+  const [tab, setTab] = useState("home");
+  const defaultBase = 5;
+  const dosiSectionRef = useRef(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [doses, setDoses] = useState(() => {
+    try {
+      const fromDisk = localStorage.getItem('inr_data_doses');
+      if (fromDisk) return new Map(Object.entries(JSON.parse(fromDisk)));
+    } catch {}
+    const m = new Map();
+    const t = todayISO();
+    for (let i = -5; i <= 35; i++) {
+      const d = iso(addDays(new Date(), i));
+      const fracs = [1, 0.75, 0.5, 0.25];
+      const f = fracs[Math.floor(Math.random() * fracs.length)];
+      const taken = isFutureISO(d, t) ? false : Math.random() > 0.5;
+      m.set(d, { fraction: f, baseMg: defaultBase, totalMg: calcTotal(f, defaultBase), taken });
+    }
+    return m;
+  });
+
+  useEffect(() => { try { localStorage.setItem('inr_data_doses', JSON.stringify(Object.fromEntries(doses))); } catch {} }, [doses]);
+
+  const [inr, setINR] = useState([
+    { date: iso(addDays(new Date(), -14)), value: 2.8 },
+    { date: iso(addDays(new Date(), -7)), value: 3.1 },
+    { date: iso(addDays(new Date(), -3)), value: 2.4 },
+  ]);
+  const [nextDraw, setNextDraw] = useState(iso(addDays(new Date(), 7)));
+
+  const [newInrDate, setNewInrDate] = useState(todayISO());
+  const [newInrVal, setNewInrVal] = useState("");
+
+  const [notes, setNotes] = useState(() => {
+    try { const raw = localStorage.getItem('inr_notes'); const parsed = raw ? JSON.parse(raw) : {}; return (parsed && typeof parsed === 'object') ? parsed : {}; } catch { return {}; }
+  });
+  const getNotes = (date) => (Array.isArray(notes[date]) ? notes[date] : []);
+  const addNote = (date, text) => {
+    const t = (text || '').trim(); if (!t) return;
+    setNotes((prev) => { const next = { ...prev }; const arr = Array.isArray(next[date]) ? next[date].slice() : []; arr.push({ ts: new Date().toISOString(), text: t }); next[date] = arr; return next; });
+  };
+  useEffect(() => { try { localStorage.setItem('inr_notes', JSON.stringify(notes)); } catch {} }, [notes]);
+  const [noteDate, setNoteDate] = useState(todayISO());
+
+  const today = todayISO();
+  const tomorrow = iso(addDays(new Date(), 1));
+  const todayDose = doses.get(today);
+  const tomorrowDose = doses.get(tomorrow);
+  const latestINR = inr.length ? [...inr].slice().sort((a,b)=>a.date.localeCompare(b.date))[inr.length-1].value : undefined;
+
+  const toggleTaken = (date) => {
+    if (isFutureISO(date, today)) { console.warn('Non è possibile segnare come presa una data futura:', date); return; }
+    const m = new Map(doses); const dd = m.get(date); if (dd) { dd.taken = !dd.taken; m.set(date, { ...dd }); setDoses(m); }
+  };
+
+  const getStatus = (date, dose) => {
+    if (!dose) return { code: 'other' };
+    const d0 = startOfDay(date); const t0 = startOfDay(today);
+    if (d0 < t0 && !dose.taken) return { code: 'dimenticata' };
+    if (dose.taken) return { code: 'presa' };
+    if (d0 >= t0 && !dose.taken) return { code: 'oggi' };
+    return { code: 'other' };
+  };
+  const getStatusCode = (date, dose) => {
+    try { const r = getStatus(date, dose); return (r && typeof r.code === 'string') ? r.code : 'other'; } catch { return 'other'; }
+  };
+
+  const days = useMemo(() => {
+    const base = new Date();
+    const start = new Date(base.getFullYear(), base.getMonth(), 1);
+    const end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+    const list = [];
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) list.push(iso(d));
+    return list;
+  }, []);
+
+  const [showOnlyWithDose, setShowOnlyWithDose] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  const applyRange = ({start,end,overwrite,baseMg,alternate,fraction,fractionA,fractionB,startWith}) => {
+    const s = new Date(start); s.setHours(0,0,0,0);
+    const e = new Date(end); e.setHours(0,0,0,0);
+    if (isNaN(s.getTime()) || isNaN(e.getTime()) || s>e) return;
+    const m = new Map(doses);
+    const offset = startWith === 'B' ? 1 : 0; let idx = 0;
+    for (let d = new Date(s); d<=e; d.setDate(d.getDate()+1)){
+      const key = iso(d); const future = isFutureISO(key, today);
+      if (overwrite || !m.get(key)){
+        const existing = m.get(key) || { taken: false };
+        let fr = sanitize(fraction,1);
+        if (alternate) { const useA = ((idx + offset) % 2) === 0; fr = useA ? sanitize(fractionA,1) : sanitize(fractionB,1); }
+        const base = clamp(sanitize(baseMg,5),0,30);
+        const taken = future ? false : !!existing.taken;
+        m.set(key,{...existing,fraction:fr,baseMg:base,totalMg:calcTotal(fr,base), taken});
+      }
+      idx++;
+    }
+    setDoses(m);
+  };
+
+  const monthStats = useMemo(() => {
+    let total = 0, taken = 0, missed = 0, pendingToday = 0, pendingFuture = 0;
+    const tISO = todayISO();
+    for (const d of days) {
+      const dd = doses.get(d); if (!dd) continue; total++;
+      const st = getStatusCode(d, dd);
+      if (st === 'presa') taken++;
+      else if (st === 'dimenticata') missed++;
+      else if (st === 'oggi') { if (d === tISO) pendingToday++; else pendingFuture++; }
+    }
+    const pct = total ? Math.round((taken / total) * 100) : 0;
+    return { total, taken, missed, pendingToday, pendingFuture, pct };
+  }, [doses, days]);
+
+  const exportMonthCSV = () => {
+    const rows = [["Data","Frazione","Base mg","Totale mg","Stato"]];
+    const monthDays = days.filter(d => !showOnlyWithDose || doses.has(d));
+    const map = { presa: 'Presa', dimenticata: 'Dimenticata', oggi: 'Da prendere', other: '—' };
+    for (const d of monthDays) {
+      const dd = doses.get(d); if (!dd) continue;
+      const st = map[getStatusCode(d, dd)] || '—';
+      rows.push([d, fractionLabel(dd.fraction), (dd.baseMg??0).toFixed(2), (dd.totalMg??0).toFixed(2), st]);
+    }
+    const csv = toCSV(rows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'Riepilogo_Dosi_' + new Date().toISOString().slice(0,7) + '.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const serializeAll = () => { const dosesObj = Object.fromEntries(doses); return { __version: 1, exportedAt: new Date().toISOString(), nextDraw, inr, notes, doses: dosesObj }; };
+  const exportAllJSON = () => { const data = serializeAll(); const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'inr-tracker-backup_' + new Date().toISOString().replace(/[:T]/g,'-').slice(0,16) + '.json'; a.click(); URL.revokeObjectURL(url); };
+  const exportAllCSV = () => {
+    const rows = [["Data","Frazione","Base mg","Totale mg","Stato"]];
+    const mapSt = { presa: 'Presa', dimenticata: 'Dimenticata', oggi: 'Da prendere', other: '—' };
+    const entries = Array.from(doses.entries()).sort((a,b)=> a[0].localeCompare(b[0]));
+    for (const [d, dd] of entries) { if (!dd) continue; const code = getStatusCode(d, dd); const st = mapSt[code] || '—'; rows.push([d, fractionLabel(dd.fraction), (dd.baseMg??0).toFixed(2), (dd.totalMg??0).toFixed(2), st]); }
+    const csv = toCSV(rows);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'INR_All_Doses_' + new Date().toISOString().slice(0,10) + '.csv'; a.click(); URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    try {
+      const payload = serializeAll();
+      localStorage.setItem('inr_auto_backup', JSON.stringify(payload));
+      localStorage.setItem('inr_auto_backup_ts', new Date().toISOString());
+    } catch {}
+  }, [doses, inr, nextDraw, notes]);
+
+  const restoreFromAutoBackup = () => {
+    try {
+      const raw = localStorage.getItem('inr_auto_backup');
+      if (!raw) { alert('Nessun backup trovato'); return; }
+      const obj = JSON.parse(raw);
+      const normalizeDose = (date, v) => { const base = (v && Number.isFinite(v.baseMg)) ? clamp(+v.baseMg, 0, 30) : 5; const fraction = (v && Number.isFinite(v.fraction)) ? clamp(+v.fraction, 0, 1) : 1; const totalMg = calcTotal(fraction, base); const taken = isFutureISO(date, today) ? false : !!(v && v.taken); return { fraction, baseMg: base, totalMg, taken }; };
+      const dosesIn = (obj.doses && typeof obj.doses === 'object') ? obj.doses : {};
+      const m = new Map(); for (const [k, v] of Object.entries(dosesIn)) m.set(k, normalizeDose(k, v));
+      setDoses(m); setINR(Array.isArray(obj.inr)?obj.inr:[]); setNotes(obj.notes||{}); setNextDraw(typeof obj.nextDraw==='string'?obj.nextDraw:today);
+      alert('Ripristino completato dal backup automatico');
+    } catch (e) { alert('Ripristino fallito: ' + (e && e.message ? e.message : 'errore')); }
+  };
+
+  const renderHome = () => (
+    <>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <Card className="relative sm:col-span-2 lg:col-span-4 p-6">
+          {todayDose && todayDose.taken && (
+            <div className="absolute top-3 right-3 rotate-12 border-2 border-green-600 text-green-600 px-3 py-1 rounded-lg font-extrabold tracking-widest text-sm opacity-80 select-none">PRESA</div>
+          )}
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+              <H>Dose di oggi</H>
+              <p className="text-2xl font-bold">{todayDose ? (<>{fractionLabel(todayDose.fraction)} di {todayDose.baseMg} mg <span className="opacity-60">({todayDose.totalMg} mg)</span></>) : '—'}</p>
+              <p className="text-sm text-gray-500 mt-1">{fmt.format(new Date(today))}</p>
+            </div>
+            <div className="flex items-center gap-3">
+              {todayDose ? (
+                <button aria-label={todayDose.taken ? 'Annulla dose presa oggi' : 'Segna la dose di oggi come presa'} onClick={() => toggleTaken(today)} className={`px-4 py-2 rounded-xl font-semibold border transition ${todayDose.taken ? 'bg-white border-green-600 text-green-700 hover:bg-green-50' : 'text-white'}`} style={{background: todayDose.taken ? undefined : 'var(--primary)', borderColor: 'var(--primary)'}}>
+                  {todayDose.taken ? 'Annulla' : 'Segna come presa'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </Card>
+
+        <Card>
+          <H>Dose di domani</H>
+          <p className="text-lg font-semibold">{tomorrowDose ? (<>{fractionLabel(tomorrowDose.fraction)} di {tomorrowDose.baseMg} mg <span className="opacity-60">({tomorrowDose.totalMg} mg)</span></>) : '—'}</p>
+        </Card>
+        <Card>
+          <H>Prossimo prelievo</H>
+          <p className="text-lg font-semibold">{(() => { const diff = Math.round((new Date(nextDraw).setHours(0,0,0,0) - new Date().setHours(0,0,0,0)) / 86400000); return diff >= 0 ? `Tra ${diff} giorni` : `${-diff} giorni fa`; })()}</p>
+          <input aria-label="Data prossimo prelievo" type="date" value={nextDraw} onChange={(e) => setNextDraw(e.target.value)} className="mt-2 border rounded px-2 py-1 w-full" />
+        </Card>
+        <Card>
+          <H>INR corrente</H>
+          <p className={`text-2xl font-bold ${latestINR && latestINR >= 2.5 && latestINR <= 3.5 ? 'text-green-600' : 'text-red-600'}`}>{latestINR !== undefined ? latestINR.toFixed(2) : '—'}</p>
+        </Card>
+      </div>
+
+      <Card>
+        <div data-hide-on-export="true">
+          <RangeDoseForm onApply={applyRange} />
+        </div>
+      </Card>
+
+      <Card>
+        <H>Altre medicine</H>
+        <div className="flex gap-2 mb-2 items-center">
+          <input type="date" value={noteDate} onChange={(e)=>setNoteDate(e.target.value)} className="border rounded px-2 py-1"/>
+          <input id="note-text" placeholder="Es. antibiotico 500mg ore 14:30" className="border rounded px-2 py-1 flex-1" />
+          <button aria-label="Aggiungi nota" onClick={()=>{ const el=document.getElementById('note-text'); const val=el && el.value ? el.value.trim() : ''; if(val){ addNote(noteDate, val); el.value=''; } }} className="px-3 py-1 text-white rounded" style={{background:'var(--primary)'}}>Aggiungi</button>
+        </div>
+        <ul>
+          {getNotes(noteDate).length === 0 ? (
+            <li className="text-sm text-gray-400">Nessuna nota per questa data</li>
+          ) : (
+            getNotes(noteDate).slice().sort((a,b)=>b.ts.localeCompare(a.ts)).map((n,i)=>(
+              <li key={n.ts + i} className="text-sm text-gray-700">{new Date(n.ts).toLocaleDateString('it-IT')} {new Date(n.ts).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})} – {n.text}</li>
+            ))
+          )}
+        </ul>
+      </Card>
+    </>
+  );
+
+  const renderDosi = () => (
+    <Card>
+      <div ref={dosiSectionRef}>
+        <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <H>Calendario dosi</H>
+            <label className="text-sm text-gray-600 flex items-center gap-2">
+              <input type="checkbox" className="accent-red-700" checked={showOnlyWithDose} onChange={(e)=>setShowOnlyWithDose(e.target.checked)} />
+              Mostra solo giorni con dose
+            </label>
+            <select aria-label="Filtra per stato" className="border rounded px-2 py-1 text-sm" value={statusFilter} onChange={(e)=>setStatusFilter(e.target.value)}>
+              <option value="all">Tutti</option>
+              <option value="presa">Prese</option>
+              <option value="oggi">Da prendere</option>
+              <option value="dimenticata">Dimenticate</option>
+            </select>
+          </div>
+          <div className="text-sm text-gray-600 flex items-center gap-3">
+            <span className="font-semibold">{monthStats.pct}% prese</span>
+            <span><Dot className="bg-green-600" /> <span className="align-middle">{monthStats.taken}</span></span>
+            <span><Dot className="bg-orange-500" /> <span className="align-middle">{monthStats.pendingToday}</span> <span className="text-gray-400">(oggi)</span></span>
+            <span><Dot className="bg-orange-300" /> <span className="align-middle">{monthStats.pendingFuture}</span> <span className="text-gray-400">(futuro)</span></span>
+            <span><Dot className="bg-red-600" /> <span className="align-middle">{monthStats.missed}</span></span>
+            <span className="text-gray-400">/ {monthStats.total}</span>
+            <button aria-label="Esporta CSV mese" onClick={exportMonthCSV} className="ml-2 px-3 py-1 rounded-lg text-white" style={{background:'var(--primary)'}}>Esporta CSV</button>
+            <button aria-label="Esporta PDF della schermata dosi" onClick={async ()=>{ if(!dosiSectionRef.current) return; try{ setPdfBusy(true); await exportElementToPDF(dosiSectionRef.current, { filename: 'Calendario_dosi.pdf' }); } catch(e){ console.error(e); alert(e.message||'Errore esportazione PDF'); } finally { setPdfBusy(false); } }} className="ml-2 px-3 py-1 rounded-lg border text-gray-700 hover:bg-gray-100">{pdfBusy ? 'Creazione…' : 'Esporta PDF'}</button>
+          </div>
+        </div>
+
+        <div data-hide-on-export="true">
+          <RangeDoseForm onApply={applyRange} />
+        </div>
+
+        <div className="grid grid-cols-7 gap-2 mt-4">
+          {(() => { const mondayIndex = days.length ? ((new Date(days[0]).getDay() + 6) % 7) : 0; const padded = [...Array.from({ length: mondayIndex }, () => null), ...days]; const chunked = []; for (let i = 0; i < padded.length; i += 7) chunked.push(padded.slice(i, i + 7)); return chunked; })().map((week, wi) => {
+            const validDays = week.filter(Boolean);
+            const rangeLabel = validDays.length ? `da ${fmtFull.format(new Date(validDays[0]))} a ${fmtFull.format(new Date(validDays[validDays.length-1]))}` : '';
+            const weekTotal = week.reduce((acc, d) => { if (!d) return acc; const dd = doses.get(d); return acc + (dd ? (dd.totalMg || 0) : 0); }, 0).toFixed(2);
+            return (
+              <div key={wi} className="col-span-7 border-t pt-2">
+                <div className="text-sm font-semibold text-gray-700 mb-1">Settimana {wi + 1} ({rangeLabel}): {weekTotal} mg</div>
+                <div className="grid grid-cols-7 gap-2">
+                  {(showOnlyWithDose ? week.filter(d => d && doses.has(d)) : week).filter(d => { if (!d) return true; if (statusFilter === 'all') return true; const dd = doses.get(d); return getStatusCode(d, dd) === statusFilter; }).map((day, di) => {
+                    if (!day) return <div key={`pad-${wi}-${di}`} />;
+                    const dd = doses.get(day); const code = getStatusCode(day, dd); const isToday = day === today; const labelDate = fmtFull.format(new Date(day));
+                    const isFuture = isFutureISO(day, today);
+                    return (
+                      <div key={day} className={`rounded-xl border p-2 ${isToday ? 'bg-red-50' : 'bg-white'}`}>
+                        <div className="flex items-center justify-between text-xs text-gray-500">
+                          <span className="capitalize">{labelDate}</span>
+                          <StatusChip status={code} />
+                        </div>
+                        <div className="text-sm font-medium">{dd ? `${fractionLabel(dd.fraction)} di ${dd.baseMg} mg` : '—'} {dd ? <span className="text-xs text-gray-500">({dd.totalMg} mg)</span> : null}</div>
+                        {(isFuture && dd) ? (
+                          <details className="mt-1">
+                            <summary className="text-xs" style={{color:'var(--primary)'}}>Modifica</summary>
+                            <DoseEditor date={day} dose={dd} onChangeFraction={(d,f)=>{ const m=new Map(doses); const ex=m.get(d); if(!ex) return; const base=ex.baseMg!=null?ex.baseMg:5; m.set(d,{...ex,fraction:f,totalMg:calcTotal(f,base)}); setDoses(m); }} />
+                          </details>
+                        ) : (
+                          <div className="mt-1 text-[11px] text-gray-400">{!dd ? 'Nessun dosaggio impostato' : 'Modifica disponibile solo per date future'}</div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Card>
+  );
+
+  const renderStorico = () => {
+    const data = [...inr].slice().sort((a, b) => a.date.localeCompare(b.date));
+    return (
+      <Card>
+        <H>Storico + Grafico</H>
+        <div className="flex items-center gap-2 mb-3">
+          <input type="date" className="border rounded px-2 py-1" value={newInrDate} onChange={(e)=>setNewInrDate(e.target.value)} />
+          <input type="number" step="0.1" placeholder="INR" className="border rounded px-2 py-1 w-28" value={newInrVal} onChange={(e)=>setNewInrVal(e.target.value)} />
+          <button className="px-3 py-1 rounded-lg text-white" style={{background:'var(--primary)'}} aria-label="Aggiungi valore INR" onClick={() => { const v = parseFloat(newInrVal); if (!isNaN(v)) { setINR(prev => [...prev, { date: newInrDate, value: v }]); setNewInrVal(""); } }}>Aggiungi</button>
+        </div>
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={data}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" tickFormatter={(v) => fmt.format(new Date(v))} minTickGap={24} />
+              <YAxis domain={[0, 6]} />
+              <Tooltip formatter={(v) => Number(v).toFixed(2)} labelFormatter={(v) => fmt.format(new Date(v))} />
+              <ReferenceArea y1={2.5} y2={3.5} fillOpacity={0.12} />
+              <ReferenceLine y={2.5} strokeDasharray="4 4" />
+              <ReferenceLine y={3.5} strokeDasharray="4 4" />
+              <Bar dataKey="value" radius={[6,6,0,0]}>
+                {data.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={(entry.value < 2.5 || entry.value > 3.5) ? '#dc2626' : '#2563eb'} />
+                ))}
+                <LabelList dataKey="value" position="top" />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <ul className="divide-y mt-3">
+          {[...inr].slice().sort((a, b) => b.date.localeCompare(a.date)).map((e) => (
+            <li key={e.date + e.value} className="flex items-center justify-between py-2">
+              <span className="text-sm text-gray-600">{fmt.format(new Date(e.date))}</span>
+              <span className={`text-sm font-semibold ${(e.value >= 2.5 && e.value <= 3.5) ? 'text-green-600' : 'text-red-600'}`}>{e.value.toFixed(2)}</span>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    );
+  };
+
+  const renderNote = () => (
+    <Card>
+      <H>Note – Altre medicine</H>
+      {Object.keys(notes).length === 0 ? (
+        <p className="text-sm text-gray-500">Nessuna nota salvata. Aggiungine una dalla Home.</p>
+      ) : (
+        <div className="space-y-4">
+          {Object.entries(notes).sort(([d1],[d2]) => d2.localeCompare(d1)).map(([date, arr]) => (
+            <div key={date} className="border rounded-xl p-3">
+              <div className="text-sm font-semibold text-gray-700 mb-2">{fmtFull.format(new Date(date))} <span className="text-gray-400">({Array.isArray(arr)?arr.length:0} note)</span></div>
+              <ul className="space-y-1">
+                {Array.isArray(arr) && arr.slice().sort((a,b)=> (b.ts || '').localeCompare(a.ts || '')).map((n, i) => (
+                  <li key={(n.ts || '') + i} className="text-sm text-gray-700">{fmtFull.format(new Date(date))} {n.ts ? new Date(n.ts).toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}) : '--:--'} – {n.text}</li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+
+  const renderExport = () => {
+    const lastTs = localStorage.getItem('inr_auto_backup_ts');
+    return (
+      <Card>
+        <H>Backup & Ripristino dati</H>
+        <div className="grid gap-4">
+          <div className="border rounded-xl p-3">
+            <div className="text-sm font-semibold mb-2">Esporta tutto</div>
+            <p className="text-sm text-gray-600 mb-2">Scarica i dati completi in <span className="font-mono">.json</span> o <span className="font-mono">.csv</span>.</p>
+            <div className="flex flex-wrap gap-2">
+              <button className="px-3 py-1 rounded-lg text-white" style={{background:'var(--primary)'}} onClick={exportAllJSON}>Esporta JSON</button>
+              <button className="px-3 py-1 rounded-lg text-white" style={{background:'var(--primary)'}} onClick={exportAllCSV}>Esporta CSV completo</button>
+            </div>
+          </div>
+
+          <div className="border rounded-xl p-3">
+            <div className="text-sm font-semibold mb-2">Importa</div>
+            <ImportBlock setDoses={setDoses} setINR={setINR} setNextDraw={setNextDraw} setNotes={setNotes} />
+          </div>
+
+          <div className="border rounded-xl p-3">
+            <div className="text-sm font-semibold mb-2">Anteprima dati correnti</div>
+            <ul className="text-sm text-gray-700 list-disc pl-4">
+              <li>Dosi totali: {Array.from(doses.keys()).length}</li>
+              <li>Valori INR: {inr.length}</li>
+              <li>Giorni con note: {Object.keys(notes||{}).length}</li>
+              <li>Prossimo prelievo: {fmt.format(new Date(nextDraw))}</li>
+              <li>Ultimo backup automatico: {lastTs ? new Date(lastTs).toLocaleString('it-IT') : '—'}</li>
+            </ul>
+          </div>
+        </div>
+      </Card>
+    );
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto p-4 space-y-4">
+      <nav className="sticky top-0 z-10 bg-white/70 backdrop-blur border-b py-2">
+        <div className="flex gap-2">
+          {[
+            { id: 'home', label: 'Home' },
+            { id: 'dosi', label: 'Dosi' },
+            { id: 'storico', label: 'Storico' },
+            { id: 'note', label: 'Note' },
+            { id: 'export', label: 'Esporta/Importa' },
+          ].map(t => (
+            <button key={t.id} className={`px-3 py-1 rounded-xl border ${tab===t.id ? 'text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`} style={{background: tab===t.id ? 'var(--primary)' : undefined, borderColor: tab===t.id ? 'var(--primary)' : '#e5e7eb'}} onClick={()=>setTab(t.id)}>{t.label}</button>
+          ))}
+        </div>
+      </nav>
+
+      {tab === 'home' && renderHome()}
+      {tab === 'dosi' && renderDosi()}
+      {tab === 'storico' && renderStorico()}
+      {tab === 'note' && renderNote()}
+      {tab === 'export' && renderExport()}
+    </div>
+  );
+}
+
+function ImportBlock({ setDoses, setINR, setNextDraw, setNotes }){
+  const [importMode, setImportMode] = React.useState('merge');
+  const normalizeDose = (today) => (date, v) => { const base = (v && Number.isFinite(v.baseMg)) ? clamp(+v.baseMg, 0, 30) : 5; const fraction = (v && Number.isFinite(v.fraction)) ? clamp(+v.fraction, 0, 1) : 1; const totalMg = calcTotal(fraction, base); const taken = isFutureISO(date, today) ? false : !!(v && v.taken); return { fraction, baseMg: base, totalMg, taken }; };
+  const onImportFile = (file) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const obj = JSON.parse(String(reader.result || '{}'));
+        const today = todayISO();
+        const normalizer = normalizeDose(today);
+        const nextDrawIn = typeof obj.nextDraw === 'string' ? obj.nextDraw : today;
+        const inrIn = Array.isArray(obj.inr) ? obj.inr.filter(e => e && e.date && Number.isFinite(+e.value)).map(e => ({ date: e.date, value: +e.value })) : [];
+        const notesIn = (obj.notes && typeof obj.notes === 'object') ? obj.notes : {};
+        const dosesIn = (obj.doses && typeof obj.doses === 'object') ? obj.doses : {};
+        if (importMode === 'replace') {
+          const m = new Map(); for (const [k, v] of Object.entries(dosesIn)) m.set(k, normalizer(k, v));
+          setDoses(m); setINR(inrIn); setNextDraw(nextDrawIn); setNotes(notesIn);
+        } else {
+          setDoses((prev)=>{ const m = new Map(prev); for (const [k, v] of Object.entries(dosesIn)) m.set(k, normalizer(k, v)); return m; });
+          setINR(inrIn); setNextDraw(nextDrawIn); setNotes(notesIn);
+        }
+        alert('Import completato.');
+      } catch (e) { alert('Errore import: ' + (e && e.message ? e.message : 'file non valido')); }
+    };
+    reader.readAsText(file);
+  };
+  return (
+    <div>
+      <div className="flex items-center gap-4 mb-2 text-sm">
+        <label className="flex items-center gap-2"><input type="radio" name="importMode" checked={importMode==='merge'} onChange={()=>setImportMode('merge')} /> Unisci (sovrascrive le stesse date)</label>
+        <label className="flex items-center gap-2"><input type="radio" name="importMode" checked={importMode==='replace'} onChange={()=>setImportMode('replace')} /> Sostituisci tutto</label>
+      </div>
+      <input type="file" accept="application/json" onChange={(e)=>{ const f=e.target.files && e.target.files[0]; if(f) onImportFile(f); e.target.value=''; }} className="block" />
+      <p className="text-[12px] text-gray-500 mt-2">Nota: per le date future l'indicatore "presa" verrà sempre impostato a <span className="font-semibold">false</span>.</p>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
+</script>
+<script>
+if ('serviceWorker' in navigator) { navigator.serviceWorker.register('https://fonteantonio1977.github.io/terapia-inr/service-worker.js'); }
+</script>
+</body>
+</html>
