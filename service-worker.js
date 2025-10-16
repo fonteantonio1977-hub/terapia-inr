@@ -1,5 +1,5 @@
 
-const CACHE = 'inr-coumadin-ghp-full-v1';
+const CACHE = 'inr-coumadin-ghp-full-v2';
 const PRECACHE_URLS = [
   'https://fonteantonio1977.github.io/terapia-inr/',
   'https://fonteantonio1977.github.io/terapia-inr/index.html',
@@ -15,11 +15,5 @@ self.addEventListener('install', (event) => {
 });
 self.addEventListener('activate', (event) => { event.waitUntil(self.clients.claim()); });
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  if (PRECACHE_URLS.includes(url.href)) {
-    event.respondWith(
-      caches.open(CACHE).then(cache => cache.match(event.request).then(resp => resp || fetch(event.request).then(r => { cache.put(event.request, r.clone()); return r; })))
-    ); return;
-  }
-  event.respondWith(fetch(event.request).then(r=>{const c=r.clone();caches.open(CACHE).then(cache=>cache.put(event.request,c));return r;}).catch(()=>caches.match(event.request).then(m=>m||caches.match('https://fonteantonio1977.github.io/terapia-inr/index.html'))));
+  event.respondWith(fetch(event.request).catch(()=>caches.match(event.request).then(r=>r||caches.match('https://fonteantonio1977.github.io/terapia-inr/index.html'))));
 });
