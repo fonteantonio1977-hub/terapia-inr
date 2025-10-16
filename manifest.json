@@ -6,7 +6,7 @@
   "display": "standalone",
   "theme_color": "#b91c1c",
   "background_color": "#fff1f2",
-  "description": "App per la gestione delle dosi di Coumadin, monitoraggio INR e note. Funziona anche offline.",
+  "description": "App per dosi Coumadin, storico INR e export. Offline.",
   "lang": "it-IT",
   "icons": [
     {
