@@ -1,10 +1,24 @@
 <!doctype html><html lang="it"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/><title>Diagnostics</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/><title>Diagnostics (vendored)</title>
 <style>body{font-family:system-ui; padding:16px;background:#fffbe6}pre{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px}</style>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script><script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script><script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.min.js" crossorigin></script></head>
-<body><h1>Diagnostics</h1><pre id="out"></pre><script>
+</head>
+<body><h1>Diagnostics (vendored)</h1><pre id="out"></pre>
+<script>
 const o=document.getElementById('out');const log=s=>o.textContent+=s+"\n";
-log('React '+(!!window.React?'OK':'FAIL'));log('ReactDOM '+(!!window.ReactDOM?'OK':'FAIL'));log('Recharts '+(!!window.Recharts?'OK':'FAIL'));
-fetch('app.js').then(r=>log('app.js '+(r.ok?'OK':'FAIL '+r.status))).catch(()=>log('app.js FAIL'));
-fetch('manifest.json').then(r=>log('manifest.json '+(r.ok?'OK':'FAIL '+r.status))).catch(()=>log('manifest.json FAIL'));
+function check(src, global){
+  return new Promise(res=>{
+    const s=document.createElement('script'); s.src=src;
+    s.onload=()=>res(window[global] ? 'OK' : 'FAIL');
+    s.onerror=()=>res('FAIL');
+    document.head.appendChild(s);
+  });
+}
+(async () => {
+  log('Testing local vendor files...');
+  log('react.production.min.js: ' + await check('vendor/react.production.min.js','React'));
+  log('react-dom.production.min.js: ' + await check('vendor/react-dom.production.min.js','ReactDOM'));
+  log('Recharts.min.js: ' + await check('vendor/Recharts.min.js','Recharts'));
+  fetch('app.js').then(r=>log('app.js ' + (r.ok?'OK':'FAIL '+r.status))).catch(()=>log('app.js FAIL'));
+  fetch('manifest.json').then(r=>log('manifest.json ' + (r.ok?'OK':'FAIL '+r.status))).catch(()=>log('manifest.json FAIL'));
+})();
 </script></body></html>
