@@ -1,10 +1,9 @@
-<!doctype html><html lang="it"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/><title>Diagnostics (vendored)</title>
-<style>body{font-family:system-ui; padding:16px;background:#fffbe6}pre{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px}</style>
-</head>
-<body><h1>Diagnostics (vendored)</h1><pre id="out"></pre>
+<!doctype html><html lang="it"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Diagnostics</title>
+<style>body{font-family:system-ui;padding:16px;background:#fffbe6}pre{background:#fff;border:1px solid #ddd;border-radius:8px;padding:12px}</style>
+</head><body><h1>Diagnostics</h1><pre id="out"></pre>
 <script>
-const o=document.getElementById('out');const log=s=>o.textContent+=s+"\n";
+const o=document.getElementById('out'); const log=s=>o.textContent+=s+"\n";
 function check(src, global){
   return new Promise(res=>{
     const s=document.createElement('script'); s.src=src;
@@ -13,12 +12,12 @@ function check(src, global){
     document.head.appendChild(s);
   });
 }
-(async () => {
+(async()=>{
   log('Testing local vendor files...');
   log('react.production.min.js: ' + await check('vendor/react.production.min.js','React'));
   log('react-dom.production.min.js: ' + await check('vendor/react-dom.production.min.js','ReactDOM'));
   log('Recharts.min.js: ' + await check('vendor/Recharts.min.js','Recharts'));
-  fetch('app.js').then(r=>log('app.js ' + (r.ok?'OK':'FAIL '+r.status))).catch(()=>log('app.js FAIL'));
-  fetch('manifest.json').then(r=>log('manifest.json ' + (r.ok?'OK':'FAIL '+r.status))).catch(()=>log('manifest.json FAIL'));
+  try{ const r1=await fetch('app.js'); log('app.js ' + (r1.ok?'OK':'FAIL '+r1.status)); }catch(e){ log('app.js FAIL'); }
+  try{ const r2=await fetch('manifest.json'); log('manifest.json ' + (r2.ok?'OK':'FAIL '+r2.status)); }catch(e){ log('manifest.json FAIL'); }
 })();
 </script></body></html>

@@ -1,28 +1,5 @@
-==============================
 INR & COUMADIN – Come aggiornare l’app
-==============================
-
-Ogni volta che pubblichi una nuova versione:
-
-1) Apri il file: service-worker.js
-   - Modifica la riga:
-       const CACHE = 'inr-coumadin-vendor-vX';
-   - Incrementa il numero finale (es. v3 → v4).
-
-2) Salva le modifiche, poi aggiorna anche gli altri file
-   che vuoi modificare (es. app.js, index.html, ecc.)
-
-3) Fai commit e push su GitHub.
-
-4) Dopo ~30 secondi, ricarica la pagina:
-       https://fonteantonio1977-hub.github.io/terapia-inr/
-   → Apparirà il pulsante 🔄 “Aggiorna App” in basso a destra
-     solo quando è disponibile una nuova versione.
-
-5) Clicca il pulsante per ricaricare e applicare la nuova versione.
-
-✅ Dopo l’aggiornamento, il pulsante sparisce finché non pubblichi un’altra release.
-
-Suggerimento tecnico:
-Puoi anche forzare un controllo aggiornamenti dalla console del browser con:
-    navigator.serviceWorker.getRegistration().then(r => r.update());
+1) Modifica in service-worker.js: const CACHE = 'inr-coumadin-vendor-vX' (incrementa X)
+2) Commit & push su GitHub
+3) Ricarica; apparirà il bottone 🔄 Aggiorna App solo se c’è una nuova versione
+4) Clicca per ricaricare l’app aggiornata

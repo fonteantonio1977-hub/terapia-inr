@@ -1,1 +1,53 @@
-<!doctype html><meta charset='utf-8'><title>INR & COUMADIN</title><p>Pacchetto ricreato. Aggiungi i file completi se necessario.</p>
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>INR & COUMADIN</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#b91c1c">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<style>
+  :root{--bg:#fff1f2;--border:#e5e7eb;--primary:#b91c1c}
+  *{box-sizing:border-box} body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;background:var(--bg);color:#111827}
+  .nav{position:sticky;top:0;background:rgba(255,255,255,.85);backdrop-filter:blur(4px);border-bottom:1px solid var(--border);padding:8px}
+  .container{max-width:1080px;margin:0 auto;padding:16px}
+</style>
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/Recharts.min.js"></script>
+</head>
+<body>
+<noscript>Abilita JavaScript per usare l’app.</noscript>
+<div id="root"></div>
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('service-worker.js');
+      let shown = false;
+      function showBtn(){
+        if (shown) return; shown = true;
+        const b = document.createElement('button');
+        b.textContent = '🔄 Aggiorna App';
+        b.style.cssText='position:fixed;bottom:20px;right:20px;background:#b91c1c;color:#fff;border:none;border-radius:12px;padding:10px 14px;font-size:14px;font-weight:600;box-shadow:0 2px 6px rgba(0,0,0,.25);cursor:pointer;z-index:9999;';
+        b.onclick = () => { const sw = reg.waiting || reg.installing; if (sw) sw.postMessage({ type: 'SKIP_WAITING' }); };
+        navigator.serviceWorker.addEventListener('controllerchange', () => { window.location.reload(); });
+        document.body.appendChild(b);
+      }
+      if (reg.waiting) showBtn();
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        if (!sw) return;
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) showBtn();
+        });
+      });
+    } catch(e){ console.error('SW registration failed:', e); }
+  });
+}
+</script>
+</body>
+</html>
