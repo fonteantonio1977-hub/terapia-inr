@@ -1,4 +1,4 @@
-const CACHE = 'inr-coumadin-cdn-max-v1';
+const CACHE = 'inr-coumadin-cdn-max-v2';
 const PRECACHE = [
   './','./index.html','./404.html','./manifest.json','./app.js',
   './icon-192.png','./icon-512.png','./apple-touch-icon.png',

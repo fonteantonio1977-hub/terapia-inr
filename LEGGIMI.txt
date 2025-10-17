@@ -1,0 +1,5 @@
+Configurazione GitHub Pages (utente.github.io/terapia-inr/)
+- manifest.json -> start_url: /terapia-inr/ ; scope: /terapia-inr/
+- service-worker.js -> cache v2
+- Carica tutti i file nella cartella 'terapia-inr' del repo Pages
+- Apri /debug.html per testare i CDN, poi / per l'app
