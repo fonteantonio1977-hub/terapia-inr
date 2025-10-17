@@ -6,7 +6,7 @@
   "display": "standalone",
   "theme_color": "#b91c1c",
   "background_color": "#fff1f2",
-  "description": "App per dosi Coumadin, storico INR e export. Offline.",
+  "description": "App per Coumadin: calendario dosi, storico INR, note, export PDF/CSV/JSON. Offline.",
   "lang": "it-IT",
   "icons": [
     {
